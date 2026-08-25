@@ -1,0 +1,1 @@
+"""DSP Portal backend application."""
