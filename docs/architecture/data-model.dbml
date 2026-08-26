@@ -1,0 +1,687 @@
+Project dsp_portal {
+  database_type: 'PostgreSQL'
+  Note: 'DSP Portal approved logical data model v1. High-frequency metrics and logs remain in observability stores.'
+}
+
+Enum principal_type {
+  USER
+  SERVICE_ACCOUNT
+}
+
+Enum subject_type {
+  PRINCIPAL
+  TEAM
+  DIRECTORY_GROUP
+}
+
+Enum resource_type {
+  VM
+  DEVSPACE
+  REPOSITORY
+  IMAGE
+  PIPELINE
+}
+
+Enum lifecycle_state {
+  PROVISIONING
+  RUNNING
+  STOPPED
+  FAILED
+  RETIRED
+  UNKNOWN
+}
+
+Enum health_state {
+  HEALTHY
+  DEGRADED
+  CRITICAL
+  UNAVAILABLE
+  UNKNOWN
+}
+
+Enum job_state {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  UNKNOWN
+}
+
+Table source_system {
+  id uuid [pk]
+  code varchar [not null, unique]
+  name varchar [not null]
+  system_type varchar [not null, note: 'LDAP, COMPUTE, RUNTIME, NEXUS, GITHUB, REMEDY, CONFLUENCE, MONITORING']
+  base_url varchar
+  status varchar [not null]
+  last_sync_at timestamptz
+}
+
+Table identity_provider {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  code varchar [not null, unique]
+  name varchar [not null]
+  provider_type varchar [not null, note: 'LDAP or ACTIVE_DIRECTORY']
+  directory_domain varchar
+  status varchar [not null]
+  last_sync_at timestamptz
+}
+
+Table principal {
+  id uuid [pk, note: 'Internal DSP user ID']
+  principal_type principal_type [not null]
+  display_name varchar [not null]
+  email varchar
+  account_status varchar [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table principal_identity {
+  id uuid [pk]
+  principal_id uuid [not null, ref: > principal.id]
+  identity_provider_id uuid [not null, ref: > identity_provider.id]
+  external_object_id varchar [not null, note: 'AD objectGUID or LDAP entryUUID']
+  enterprise_user_id varchar
+  username varchar
+  user_principal_name varchar
+  distinguished_name varchar
+  is_primary boolean [not null, default: false]
+  last_synced_at timestamptz [not null]
+
+  indexes {
+    (identity_provider_id, external_object_id) [unique]
+  }
+}
+
+Table directory_group {
+  id uuid [pk]
+  identity_provider_id uuid [not null, ref: > identity_provider.id]
+  external_object_id varchar [not null]
+  distinguished_name varchar [not null]
+  group_name varchar [not null]
+  display_name varchar
+  group_type varchar [not null, note: 'ACCESS, ENTITLEMENT, ADMIN, TEAM_MAPPING']
+  status varchar [not null]
+  last_synced_at timestamptz [not null]
+
+  indexes {
+    (identity_provider_id, external_object_id) [unique]
+  }
+}
+
+Table directory_group_membership {
+  id uuid [pk]
+  group_id uuid [not null, ref: > directory_group.id]
+  member_principal_id uuid [ref: > principal.id]
+  member_group_id uuid [ref: > directory_group.id]
+  membership_type varchar [not null, note: 'DIRECT or NESTED']
+  valid_from timestamptz [not null]
+  valid_to timestamptz
+  observed_at timestamptz [not null]
+
+  Note: 'Exactly one of member_principal_id or member_group_id must be populated.'
+}
+
+Table team {
+  id uuid [pk]
+  team_code varchar [not null, unique]
+  team_name varchar [not null]
+  business_unit varchar
+  cost_centre varchar
+  description text
+  owner_principal_id uuid [ref: > principal.id]
+  source_system_id uuid [ref: > source_system.id]
+  status varchar [not null]
+}
+
+Table team_membership {
+  team_id uuid [not null, ref: > team.id]
+  principal_id uuid [not null, ref: > principal.id]
+  team_role varchar [not null, note: 'MEMBER, LEAD, APPROVER']
+  membership_source varchar [not null, note: 'HR, LDAP_MAPPING, MANUAL']
+  source_group_id uuid [ref: > directory_group.id]
+  valid_from timestamptz [not null]
+  valid_to timestamptz
+
+  indexes {
+    (team_id, principal_id, valid_from) [pk]
+  }
+}
+
+Table team_group_binding {
+  team_id uuid [not null, ref: > team.id]
+  directory_group_id uuid [not null, ref: > directory_group.id]
+  binding_type varchar [not null, note: 'MEMBERSHIP, ACCESS, APPROVER']
+  is_primary boolean [not null, default: false]
+
+  indexes {
+    (team_id, directory_group_id, binding_type) [pk]
+  }
+}
+
+Table access_subject {
+  id uuid [pk]
+  subject_type subject_type [not null]
+  principal_id uuid [ref: > principal.id]
+  team_id uuid [ref: > team.id]
+  directory_group_id uuid [ref: > directory_group.id]
+
+  Note: 'Exactly one subject reference must be populated and match subject_type.'
+}
+
+Table dsp_tenant {
+  id uuid [pk]
+  tenant_code varchar [not null, unique]
+  tenant_name varchar [not null]
+  environment varchar [not null]
+  business_owner_id uuid [ref: > principal.id]
+  technical_owner_id uuid [ref: > principal.id]
+  status varchar [not null]
+  created_at timestamptz [not null]
+}
+
+Table resource {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > dsp_tenant.id]
+  resource_type resource_type [not null]
+  name varchar [not null]
+  environment varchar [not null]
+  lifecycle_state lifecycle_state [not null]
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_id varchar [not null]
+  metadata jsonb
+  first_seen_at timestamptz [not null]
+  last_seen_at timestamptz [not null]
+  retired_at timestamptz
+
+  indexes {
+    (source_system_id, external_id) [unique]
+    (tenant_id, resource_type, lifecycle_state)
+  }
+}
+
+Table resource_access {
+  id uuid [pk]
+  resource_id uuid [not null, ref: > resource.id]
+  access_subject_id uuid [not null, ref: > access_subject.id]
+  access_role varchar [not null, note: 'OWNER, CONTRIBUTOR, VIEWER, SUPPORT']
+  permission_set varchar
+  granted_at timestamptz [not null]
+  expires_at timestamptz
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_entitlement_id varchar
+}
+
+Table platform_service {
+  id uuid [pk]
+  service_code varchar [not null, unique]
+  service_name varchar [not null]
+  service_type varchar [not null]
+  owner_team_id uuid [ref: > team.id]
+  status_source_system_id uuid [ref: > source_system.id]
+}
+
+Table service_entitlement {
+  id uuid [pk]
+  access_subject_id uuid [not null, ref: > access_subject.id]
+  platform_service_id uuid [not null, ref: > platform_service.id]
+  entitlement_type varchar [not null]
+  entitlement_state varchar [not null, note: 'PENDING, ACTIVE, REVOKED, EXPIRED']
+  external_account_id varchar
+  granted_at timestamptz
+  expires_at timestamptz
+  observed_at timestamptz [not null]
+}
+
+Table network_zone {
+  id uuid [pk]
+  name varchar [not null, unique]
+  environment varchar [not null]
+  security_classification varchar
+  description text
+}
+
+Table network_subnet {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > dsp_tenant.id]
+  network_zone_id uuid [not null, ref: > network_zone.id]
+  cidr cidr [not null]
+  gateway inet
+  vlan_reference varchar
+  status varchar [not null]
+}
+
+Table vm {
+  resource_id uuid [pk, ref: > resource.id]
+  hostname varchar [not null]
+  fqdn varchar
+  host_group varchar [not null]
+  operating_system varchar
+  kernel_version varchar
+  container_runtime varchar
+  cpu_capacity_cores numeric
+  memory_capacity_bytes bigint
+  storage_capacity_bytes bigint
+  provisioned_at timestamptz
+  booted_at timestamptz
+  last_patched_at timestamptz
+}
+
+Table network_interface {
+  id uuid [pk]
+  vm_id uuid [not null, ref: > vm.resource_id]
+  interface_name varchar [not null]
+  mac_address macaddr
+  network_zone_id uuid [not null, ref: > network_zone.id]
+  interface_type varchar [not null, note: 'MANAGEMENT, WORKLOAD, STORAGE']
+  is_primary boolean [not null, default: false]
+  observed_at timestamptz [not null]
+}
+
+Table ip_assignment {
+  id uuid [pk]
+  network_interface_id uuid [not null, ref: > network_interface.id]
+  subnet_id uuid [not null, ref: > network_subnet.id]
+  ip_address inet [not null]
+  address_type varchar [not null, note: 'PRIMARY, SECONDARY, NAT']
+  valid_from timestamptz [not null]
+  valid_to timestamptz
+  observed_at timestamptz [not null]
+}
+
+Table artifact_repository {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  repository_type varchar [not null, note: 'NEXUS_CONTAINER or NEXUS_PYPI']
+  name varchar [not null]
+  external_url varchar
+  status varchar [not null]
+}
+
+Table image_version {
+  id uuid [pk]
+  resource_id uuid [not null, unique, ref: > resource.id]
+  repository_id uuid [not null, ref: > artifact_repository.id]
+  image_name varchar [not null]
+  tag varchar [not null]
+  digest varchar [not null]
+  python_version varchar
+  approval_state varchar [not null]
+  released_at timestamptz
+  retired_at timestamptz
+
+  indexes {
+    (repository_id, digest) [unique]
+  }
+}
+
+Table devspace {
+  resource_id uuid [pk, ref: > resource.id]
+  runtime_id varchar [not null]
+  runtime_type varchar [not null, note: 'DEVSPACE or DEV_CONTAINER']
+  image_version_id uuid [not null, ref: > image_version.id]
+  created_at timestamptz [not null]
+  started_at timestamptz
+  stopped_at timestamptz
+  last_activity_at timestamptz
+  cpu_limit_millicores integer
+  memory_limit_bytes bigint
+  storage_limit_bytes bigint
+  restart_count integer [not null, default: 0]
+}
+
+Table devspace_placement {
+  id uuid [pk]
+  devspace_id uuid [not null, ref: > devspace.resource_id]
+  vm_id uuid [not null, ref: > vm.resource_id]
+  placed_at timestamptz [not null]
+  removed_at timestamptz
+  source_system_id uuid [not null, ref: > source_system.id]
+  observed_at timestamptz [not null]
+
+  Note: 'A partial unique index must permit only one placement with removed_at IS NULL per devspace.'
+}
+
+Table devspace_service_binding {
+  id uuid [pk]
+  devspace_id uuid [not null, ref: > devspace.resource_id]
+  platform_service_id uuid [not null, ref: > platform_service.id]
+  connection_state varchar [not null, note: 'CONNECTED, DEGRADED, NOT_CONFIGURED']
+  external_account_reference varchar
+  observed_at timestamptz [not null]
+  valid_until timestamptz [not null]
+}
+
+Table git_repository {
+  resource_id uuid [pk, ref: > resource.id]
+  organisation varchar [not null]
+  repository_name varchar [not null]
+  default_branch varchar
+  external_url varchar
+}
+
+Table kedro_project {
+  id uuid [pk]
+  name varchar [not null]
+  repository_id uuid [not null, ref: > git_repository.resource_id]
+  owner_team_id uuid [ref: > team.id]
+}
+
+Table pipeline_definition {
+  id uuid [pk]
+  project_id uuid [not null, ref: > kedro_project.id]
+  pipeline_name varchar [not null]
+  description text
+}
+
+Table pipeline_version {
+  id uuid [pk]
+  pipeline_id uuid [not null, ref: > pipeline_definition.id]
+  git_commit_sha varchar [not null]
+  configuration_hash varchar
+  created_at timestamptz [not null]
+}
+
+Table job_run {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > dsp_tenant.id]
+  pipeline_version_id uuid [not null, ref: > pipeline_version.id]
+  triggered_by_principal_id uuid [ref: > principal.id]
+  devspace_id uuid [not null, ref: > devspace.resource_id]
+  vm_id_snapshot uuid [not null]
+  image_digest_snapshot varchar [not null]
+  git_commit_sha_snapshot varchar [not null]
+  state job_state [not null]
+  trigger_type varchar [not null]
+  queued_at timestamptz
+  started_at timestamptz
+  finished_at timestamptz
+  exit_code integer
+  failed_node varchar
+  failure_category varchar
+  last_message text
+  cpu_peak_millicores integer
+  memory_peak_bytes bigint
+  correlation_id uuid [not null]
+
+  indexes {
+    (devspace_id, started_at)
+    (tenant_id, state, started_at)
+  }
+}
+
+Table job_node_run {
+  id uuid [pk]
+  job_run_id uuid [not null, ref: > job_run.id]
+  node_name varchar [not null]
+  sequence_number integer [not null]
+  state job_state [not null]
+  started_at timestamptz
+  finished_at timestamptz
+  failure_message text
+}
+
+Table job_artifact {
+  id uuid [pk]
+  job_run_id uuid [not null, ref: > job_run.id]
+  artifact_type varchar [not null, note: 'MODEL, DATASET, REPORT, METRIC']
+  name varchar [not null]
+  external_uri varchar [not null]
+  checksum varchar
+  metadata jsonb
+  created_at timestamptz [not null]
+}
+
+Table health_assessment {
+  id uuid [pk]
+  resource_id uuid [ref: > resource.id]
+  platform_service_id uuid [ref: > platform_service.id]
+  health_state health_state [not null]
+  reason_code varchar
+  summary text
+  rule_version varchar
+  observed_at timestamptz [not null]
+  valid_until timestamptz [not null]
+
+  Note: 'Exactly one of resource_id or platform_service_id must be populated.'
+}
+
+Table incident {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_incident_id varchar [not null]
+  title varchar [not null]
+  summary text
+  severity varchar [not null]
+  status varchar [not null]
+  started_at timestamptz [not null]
+  resolved_at timestamptz
+  remedy_url varchar
+
+  indexes {
+    (source_system_id, external_incident_id) [unique]
+  }
+}
+
+Table incident_impact {
+  id uuid [pk]
+  incident_id uuid [not null, ref: > incident.id]
+  resource_id uuid [ref: > resource.id]
+  platform_service_id uuid [ref: > platform_service.id]
+  impact_type varchar [not null]
+  detected_at timestamptz [not null]
+  cleared_at timestamptz
+
+  Note: 'Exactly one of resource_id or platform_service_id must be populated.'
+}
+
+Table planned_change {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_change_id varchar [not null]
+  title varchar [not null]
+  description text
+  change_type varchar [not null]
+  starts_at timestamptz [not null]
+  ends_at timestamptz
+  action_required boolean [not null, default: false]
+  external_url varchar
+
+  indexes {
+    (source_system_id, external_change_id) [unique]
+  }
+}
+
+Table change_impact {
+  planned_change_id uuid [not null, ref: > planned_change.id]
+  resource_id uuid [not null, ref: > resource.id]
+  impact_level varchar [not null]
+  impact_summary text
+
+  indexes {
+    (planned_change_id, resource_id) [pk]
+  }
+}
+
+Table troubleshooting_guide {
+  id uuid [pk]
+  platform_service_id uuid [not null, ref: > platform_service.id]
+  slug varchar [not null, unique]
+  title varchar [not null]
+  summary text
+  confluence_url varchar
+  content_version varchar
+  last_reviewed_at timestamptz
+  owner_team_id uuid [ref: > team.id]
+}
+
+Table common_issue {
+  id uuid [pk]
+  platform_service_id uuid [not null, ref: > platform_service.id]
+  title varchar [not null]
+  error_code_pattern varchar
+  guide_id uuid [not null, ref: > troubleshooting_guide.id]
+  status varchar [not null]
+}
+
+Table support_route {
+  id uuid [pk]
+  platform_service_id uuid [ref: > platform_service.id]
+  route_type varchar [not null, note: 'TEAMS, REMEDY, CONFLUENCE']
+  route_url varchar [not null]
+  queue_name varchar
+  priority integer [not null, default: 0]
+  active boolean [not null, default: true]
+}
+
+Table support_roster_shift {
+  id uuid [pk]
+  platform_service_id uuid [ref: > platform_service.id]
+  principal_id uuid [not null, ref: > principal.id]
+  starts_at timestamptz [not null]
+  ends_at timestamptz [not null]
+  availability_state varchar [not null]
+  teams_url varchar
+}
+
+Table ticket_reference {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_ticket_id varchar [not null]
+  requester_principal_id uuid [not null, ref: > principal.id]
+  platform_service_id uuid [not null, ref: > platform_service.id]
+  status varchar [not null]
+  external_url varchar [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+
+  indexes {
+    (source_system_id, external_ticket_id) [unique]
+  }
+}
+
+Table onboarding_program {
+  id uuid [pk]
+  name varchar [not null]
+  version varchar [not null]
+  active boolean [not null, default: true]
+}
+
+Table onboarding_step {
+  id uuid [pk]
+  program_id uuid [not null, ref: > onboarding_program.id]
+  step_order integer [not null]
+  title varchar [not null]
+  description text
+  guide_url varchar
+}
+
+Table user_onboarding_step {
+  principal_id uuid [not null, ref: > principal.id]
+  onboarding_step_id uuid [not null, ref: > onboarding_step.id]
+  state varchar [not null, note: 'UPCOMING, CURRENT, COMPLETE, WAIVED']
+  completed_at timestamptz
+  observed_at timestamptz [not null]
+
+  indexes {
+    (principal_id, onboarding_step_id) [pk]
+  }
+}
+
+Table access_requirement {
+  id uuid [pk]
+  onboarding_step_id uuid [not null, ref: > onboarding_step.id]
+  platform_service_id uuid [ref: > platform_service.id]
+  entitlement_type varchar
+  title varchar [not null]
+  required boolean [not null, default: true]
+}
+
+Table training_asset {
+  id uuid [pk]
+  title varchar [not null]
+  asset_type varchar [not null, note: 'VIDEO, GUIDE, COURSE']
+  external_url varchar [not null]
+  duration_seconds integer
+  active boolean [not null, default: true]
+}
+
+Table training_completion {
+  principal_id uuid [not null, ref: > principal.id]
+  training_asset_id uuid [not null, ref: > training_asset.id]
+  completed_at timestamptz [not null]
+  source_system_id uuid [ref: > source_system.id]
+
+  indexes {
+    (principal_id, training_asset_id) [pk]
+  }
+}
+
+Table bootcamp_session {
+  id uuid [pk]
+  title varchar [not null]
+  starts_at timestamptz [not null]
+  ends_at timestamptz [not null]
+  capacity integer
+  registration_url varchar
+  status varchar [not null]
+}
+
+Table bootcamp_enrollment {
+  session_id uuid [not null, ref: > bootcamp_session.id]
+  principal_id uuid [not null, ref: > principal.id]
+  state varchar [not null, note: 'REGISTERED, ATTENDED, CANCELLED']
+  registered_at timestamptz [not null]
+
+  indexes {
+    (session_id, principal_id) [pk]
+  }
+}
+
+Table operational_event {
+  id uuid [pk]
+  event_type varchar [not null]
+  tenant_id uuid [ref: > dsp_tenant.id]
+  resource_id uuid [ref: > resource.id]
+  principal_id uuid [ref: > principal.id]
+  correlation_id uuid
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_event_id varchar [not null]
+  occurred_at timestamptz [not null]
+  received_at timestamptz [not null]
+  schema_version integer [not null]
+  payload jsonb
+
+  indexes {
+    (source_system_id, external_event_id) [unique]
+    (tenant_id, occurred_at)
+    (resource_id, occurred_at)
+  }
+}
+
+Table notification {
+  id uuid [pk]
+  notification_type varchar [not null]
+  severity varchar [not null]
+  title varchar [not null]
+  message text [not null]
+  resource_id uuid [ref: > resource.id]
+  incident_id uuid [ref: > incident.id]
+  planned_change_id uuid [ref: > planned_change.id]
+  created_at timestamptz [not null]
+  expires_at timestamptz
+}
+
+Table user_notification_state {
+  notification_id uuid [not null, ref: > notification.id]
+  principal_id uuid [not null, ref: > principal.id]
+  read_at timestamptz
+  dismissed_at timestamptz
+
+  indexes {
+    (notification_id, principal_id) [pk]
+  }
+}
