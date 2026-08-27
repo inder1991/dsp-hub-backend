@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from app.core.config import Settings
 from app.models.support import (
@@ -10,7 +9,7 @@ from app.models.support import (
 )
 
 
-def _append_path(base_url: str, path: str) -> Optional[str]:
+def _append_path(base_url: str, path: str) -> str | None:
     if not base_url:
         return None
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -256,7 +255,7 @@ class SupportCatalogService:
                 )
             )
         return SupportResponse(
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
             dsp_support=SupportSpecialist(
                 name=self.settings.support_roster_name,
                 role=self.settings.support_roster_role,

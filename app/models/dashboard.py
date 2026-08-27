@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,7 +33,7 @@ class HealthService(ApiModel):
     name: str
     state: ItemState
     status: str
-    summary: Optional[str] = None
+    summary: str | None = None
 
 
 class HealthSummary(ApiModel):
@@ -44,12 +44,12 @@ class HealthSummary(ApiModel):
 
 
 class SystemStatus(HealthService):
-    details_url: Optional[str] = None
+    details_url: str | None = None
 
 
 class IncidentSummary(ApiModel):
     message: str
-    url: Optional[str] = None
+    url: str | None = None
 
 
 class Metric(ApiModel):
@@ -86,15 +86,15 @@ class UpcomingChange(ApiModel):
     impact: str
     state: ItemState
     status: str
-    url: Optional[str] = None
+    url: str | None = None
 
 
 class ExternalLinks(ApiModel):
-    confluence_dsp: Optional[str] = None
-    confluence_status: Optional[str] = None
-    confluence_releases: Optional[str] = None
-    remedy_tickets: Optional[str] = None
-    remedy_requests: Optional[str] = None
+    confluence_dsp: str | None = None
+    confluence_status: str | None = None
+    confluence_releases: str | None = None
+    remedy_tickets: str | None = None
+    remedy_requests: str | None = None
 
 
 class DashboardResponse(ApiModel):
@@ -112,3 +112,15 @@ class ServiceHealthResponse(ApiModel):
     status: Literal["ok"] = "ok"
     service: str = "dsp-portal-backend"
     environment: str
+
+
+class ReadinessDependency(ApiModel):
+    status: Literal["ready", "degraded", "unavailable"]
+    detail: str
+
+
+class ServiceReadinessResponse(ApiModel):
+    status: Literal["ready", "unavailable"]
+    service: str = "dsp-portal-backend"
+    environment: str
+    dependencies: dict[str, ReadinessDependency]

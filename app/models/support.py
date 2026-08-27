@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field
 
@@ -11,21 +11,21 @@ class SupportIssue(ApiModel):
     title: str
     description: str
     estimated_minutes: int = Field(ge=1)
-    guide_url: Optional[str] = None
+    guide_url: str | None = None
 
 
 class SupportSpecialist(ApiModel):
     name: str
     role: str
     roster_status: Literal["available", "busy", "offline"]
-    teams_url: Optional[str] = None
+    teams_url: str | None = None
 
 
 class SupportServiceItem(ApiModel):
     id: str
     name: str
     description: str
-    remedy_url: Optional[str] = None
+    remedy_url: str | None = None
     specialist: SupportSpecialist
     issues: list[SupportIssue]
 

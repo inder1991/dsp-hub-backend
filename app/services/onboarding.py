@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from app.core.config import Settings
 from app.models.onboarding import (
@@ -14,7 +13,7 @@ from app.models.onboarding import (
 )
 
 
-def _append_path(base_url: str, path: str) -> Optional[str]:
+def _append_path(base_url: str, path: str) -> str | None:
     if not base_url:
         return None
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -29,11 +28,11 @@ class OnboardingCatalogService:
     def catalog(self) -> OnboardingResponse:
         configured = self.settings.onboarding_links
 
-        def link(key: str, fallback_path: str) -> Optional[str]:
+        def link(key: str, fallback_path: str) -> str | None:
             return configured.get(key) or _append_path(self.settings.confluence_dsp_url, fallback_path)
 
         return OnboardingResponse(
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
             completed_steps=2,
             total_steps=5,
             steps=[

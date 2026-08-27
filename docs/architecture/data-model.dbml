@@ -1,11 +1,16 @@
 Project dsp_portal {
   database_type: 'PostgreSQL'
-  Note: 'DSP Portal approved logical data model v1. High-frequency metrics and logs remain in observability stores.'
+  Note: 'DSP Portal approved logical data model v3. Release-one authentication state uses PostgreSQL; Redis, high-frequency metrics, logs, and all Hive table contents remain outside the portal.'
 }
 
 Enum principal_type {
   USER
   SERVICE_ACCOUNT
+}
+
+Enum portal_role {
+  ADMIN
+  READ_ONLY
 }
 
 Enum subject_type {
@@ -52,7 +57,7 @@ Table source_system {
   id uuid [pk]
   code varchar [not null, unique]
   name varchar [not null]
-  system_type varchar [not null, note: 'LDAP, COMPUTE, RUNTIME, NEXUS, GITHUB, REMEDY, CONFLUENCE, MONITORING']
+  system_type varchar [not null, note: 'IDENTITY, LDAP, COMPUTE, RUNTIME, NEXUS, GITHUB, REMEDY, CONFLUENCE, MONITORING']
   base_url varchar
   status varchar [not null]
   last_sync_at timestamptz
@@ -63,7 +68,7 @@ Table identity_provider {
   source_system_id uuid [not null, ref: > source_system.id]
   code varchar [not null, unique]
   name varchar [not null]
-  provider_type varchar [not null, note: 'LDAP or ACTIVE_DIRECTORY']
+  provider_type varchar [not null, note: 'LDAP, ACTIVE_DIRECTORY, or LOCAL']
   directory_domain varchar
   status varchar [not null]
   last_sync_at timestamptz
@@ -75,6 +80,10 @@ Table principal {
   display_name varchar [not null]
   email varchar
   account_status varchar [not null]
+  portal_role portal_role [not null, default: 'READ_ONLY']
+  role_source varchar [not null, note: 'PING_GROUP, LOCAL_ASSIGNMENT, or SYSTEM']
+  authorization_version bigint [not null, default: 1]
+  role_updated_at timestamptz [not null]
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 }
@@ -83,7 +92,7 @@ Table principal_identity {
   id uuid [pk]
   principal_id uuid [not null, ref: > principal.id]
   identity_provider_id uuid [not null, ref: > identity_provider.id]
-  external_object_id varchar [not null, note: 'AD objectGUID or LDAP entryUUID']
+  external_object_id varchar [not null, note: 'AD objectGUID, LDAP entryUUID, or immutable local-account UUID']
   enterprise_user_id varchar
   username varchar
   user_principal_name varchar
@@ -93,6 +102,160 @@ Table principal_identity {
 
   indexes {
     (identity_provider_id, external_object_id) [unique]
+  }
+}
+
+Table saml_login_transaction {
+  id uuid [pk]
+  identity_provider_id uuid [not null, ref: > identity_provider.id]
+  relay_state_hash bytea [not null, unique, note: 'SHA-256; plaintext RelayState is never persisted']
+  saml_request_id varchar [not null, unique]
+  login_nonce_hash bytea [not null, note: 'SHA-256; plaintext browser nonce is never persisted']
+  return_path varchar [not null, note: 'Local allow-listed DSP route only']
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null]
+
+  indexes {
+    expires_at
+  }
+}
+
+Table saml_assertion_replay {
+  id uuid [pk]
+  identity_provider_id uuid [not null, ref: > identity_provider.id]
+  assertion_id_hash bytea [not null, note: 'SHA-256; raw assertion and identifier are never persisted']
+  accepted_at timestamptz [not null]
+  expires_at timestamptz [not null]
+
+  indexes {
+    (identity_provider_id, assertion_id_hash) [unique]
+    expires_at
+  }
+}
+
+Table auth_exchange_code {
+  id uuid [pk]
+  code_hash bytea [not null, unique, note: 'SHA-256 of a cryptographically random value with at least 256 bits of entropy']
+  principal_id uuid [not null, ref: > principal.id]
+  login_nonce_hash bytea [not null]
+  return_path varchar [not null]
+  authorization_version bigint
+  authenticated_at timestamptz [not null]
+  provider_session_expires_at timestamptz [note: 'Ping SessionNotOnOrAfter; caps the DSP refresh session']
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null, note: 'Exactly 60 seconds after creation']
+
+  indexes {
+    expires_at
+  }
+}
+
+Table auth_refresh_session {
+  id uuid [pk]
+  session_family_id uuid [not null]
+  session_id_hash bytea [not null, unique, note: 'SHA-256; plaintext cookie value is never persisted']
+  csrf_token_hash bytea [not null, note: 'SHA-256; plaintext CSRF value is never persisted']
+  principal_id uuid [not null, ref: > principal.id]
+  authentication_provider varchar [not null, note: 'PING_SAML or LOCAL']
+  authorization_snapshot jsonb [not null, note: 'Minimal approved role snapshot; never the SAML assertion or full LDAP membership']
+  authorization_version bigint [not null]
+  authenticated_at timestamptz [not null]
+  issued_at timestamptz [not null]
+  last_refreshed_at timestamptz
+  expires_at timestamptz [not null]
+  revoked_at timestamptz
+  replaced_by_session_id uuid [ref: > auth_refresh_session.id]
+
+  indexes {
+    (principal_id, expires_at)
+    (session_family_id, issued_at)
+    expires_at
+  }
+}
+
+Table local_account {
+  id uuid [pk]
+  principal_id uuid [not null, unique, ref: > principal.id]
+  username citext [not null, unique, note: 'Unicode-normalized and compared case-insensitively']
+  password_hash varchar [not null, note: 'Encoded Argon2id hash with parameters and per-password salt; never plaintext or reversible']
+  status varchar [not null, note: 'PENDING, ACTIVE, LOCKED, DISABLED, EXPIRED']
+  failed_attempt_count integer [not null, default: 0]
+  locked_until timestamptz
+  password_changed_at timestamptz
+  must_change_password boolean [not null, default: true]
+  account_expires_at timestamptz
+  last_login_at timestamptz
+  created_by_principal_id uuid [not null, ref: > principal.id]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+
+  indexes {
+    (status, locked_until)
+    account_expires_at
+  }
+}
+
+Table local_password_action {
+  id uuid [pk]
+  local_account_id uuid [not null, ref: > local_account.id]
+  action_code_hash bytea [not null, unique, note: 'SHA-256 of a cryptographically random, single-use code']
+  action_type varchar [not null, note: 'INITIAL_SETUP or RESET']
+  issued_by_principal_id uuid [not null, ref: > principal.id]
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null]
+  consumed_at timestamptz
+
+  indexes {
+    (local_account_id, expires_at)
+    expires_at
+  }
+}
+
+Table auth_rate_limit_bucket {
+  id uuid [pk]
+  scope varchar [not null, note: 'Route/provider policy name; contains no username or source address']
+  key_hash bytea [not null, note: 'SHA-256 of the rate-limit subject']
+  window_started_at timestamptz [not null]
+  request_count integer [not null, default: 0]
+  expires_at timestamptz [not null]
+
+  indexes {
+    (scope, key_hash, window_started_at) [unique]
+    expires_at
+  }
+}
+
+Table auth_idempotency_key {
+  id uuid [pk]
+  key_hash bytea [not null, unique, note: 'SHA-256 over administrator, operation and caller key']
+  operation varchar [not null]
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null]
+
+  indexes {
+    expires_at
+  }
+}
+
+Table authentication_audit_event {
+  id uuid [pk]
+  event_type varchar [not null]
+  outcome varchar [not null]
+  principal_id uuid [note: 'Denormalized actor identifier retained with the audit event']
+  target_principal_id uuid [note: 'Denormalized target identifier retained with the audit event']
+  username varchar [note: 'Normalized operational identifier; never a password or assertion']
+  source_ip varchar
+  correlation_id varchar
+  idempotency_key_hash bytea [unique]
+  detail varchar [note: 'Reason code or approved administrator reason; no secrets']
+  before_state jsonb
+  after_state jsonb
+  created_at timestamptz [not null]
+
+  indexes {
+    (event_type, created_at)
+    correlation_id
+    target_principal_id
   }
 }
 
@@ -433,6 +596,115 @@ Table job_artifact {
   checksum varchar
   metadata jsonb
   created_at timestamptz [not null]
+}
+
+Table hive_table {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_table_id varchar [not null]
+  database_name varchar [not null]
+  table_name varchar [not null]
+  owner_team_id uuid [ref: > team.id]
+  lifecycle_state varchar [not null]
+  first_seen_at timestamptz [not null]
+  last_synced_at timestamptz [not null]
+
+  indexes {
+    (source_system_id, external_table_id) [unique]
+    (source_system_id, database_name, table_name) [unique]
+  }
+
+  Note: 'Metadata identity only. Never store rows, samples, column values, query results, locations, or download references.'
+}
+
+Table hive_table_entitlement {
+  id uuid [pk]
+  hive_table_id uuid [not null, ref: > hive_table.id]
+  access_subject_id uuid [not null, ref: > access_subject.id]
+  privilege varchar [not null, note: 'For example SELECT']
+  external_policy_id varchar
+  policy_name varchar
+  source_system_id uuid [not null, ref: > source_system.id]
+  valid_from timestamptz [not null]
+  valid_to timestamptz
+  observed_at timestamptz [not null]
+
+  indexes {
+    (hive_table_id, access_subject_id, privilege, valid_from) [unique]
+  }
+}
+
+Table morning_ingestion_snapshot {
+  id uuid [pk]
+  hive_table_id uuid [not null, ref: > hive_table.id]
+  business_date date [not null]
+  status varchar [not null, note: 'SUCCEEDED, LATE, FAILED, PENDING, NOT_RECEIVED']
+  sla_state varchar [not null, note: 'WITHIN_SLA, AT_RISK, BREACHED, AWAITING']
+  scheduled_for timestamptz [not null]
+  completed_at timestamptz
+  last_successful_business_date date
+  operational_summary text
+  source_system_id uuid [not null, ref: > source_system.id]
+  observed_at timestamptz [not null]
+
+  indexes {
+    (hive_table_id, business_date) [unique]
+    (business_date, status)
+  }
+
+  Note: 'Operational status only. Contains no Hive table contents or values.'
+}
+
+Table yarn_queue {
+  id uuid [pk]
+  source_system_id uuid [not null, ref: > source_system.id]
+  external_queue_id varchar [not null]
+  queue_path varchar [not null]
+  owner_team_id uuid [not null, ref: > team.id]
+  access_group_id uuid [ref: > directory_group.id]
+  configured_capacity_percentage numeric [not null]
+  status varchar [not null]
+  last_synced_at timestamptz [not null]
+
+  indexes {
+    (source_system_id, external_queue_id) [unique]
+    (source_system_id, queue_path) [unique]
+  }
+}
+
+Table yarn_queue_snapshot {
+  id uuid [pk]
+  yarn_queue_id uuid [not null, ref: > yarn_queue.id]
+  health_state health_state [not null]
+  used_capacity_percentage numeric [not null]
+  running_applications integer [not null]
+  pending_applications integer [not null]
+  allocated_memory_bytes bigint [not null]
+  pending_memory_bytes bigint [not null]
+  observed_at timestamptz [not null]
+
+  indexes {
+    (yarn_queue_id, observed_at) [unique]
+  }
+}
+
+Table vm_allocation_request {
+  id uuid [pk]
+  tenant_id uuid [not null, ref: > dsp_tenant.id]
+  vm_resource_id uuid [ref: > vm.resource_id]
+  requested_vm_name varchar [not null]
+  target_team_id uuid [not null, ref: > team.id]
+  target_group_id uuid [not null, ref: > directory_group.id]
+  requested_by_principal_id uuid [not null, ref: > principal.id]
+  approver_principal_id uuid [ref: > principal.id]
+  workflow_state varchar [not null, note: 'DRAFT, PENDING_APPROVAL, APPROVED, APPLYING, ACTIVE, FAILED, REJECTED']
+  request_summary text
+  execution_reference varchar
+  requested_at timestamptz [not null]
+  decided_at timestamptz
+  completed_at timestamptz
+
+  Note: 'Governed workflow record; infrastructure is changed only by an authenticated adapter after approval.'
 }
 
 Table health_assessment {

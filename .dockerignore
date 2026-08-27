@@ -1,0 +1,13 @@
+.git
+.env
+.secrets
+.venv*
+__pycache__
+*.pyc
+*.pem
+.pytest_cache
+.ruff_cache
+build
+dist
+docs
+tests

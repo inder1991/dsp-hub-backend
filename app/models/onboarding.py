@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field
 
@@ -21,7 +21,7 @@ class SetupTask(ApiModel):
     title: str
     description: str
     state: Literal["complete", "next", "optional"]
-    guide_url: Optional[str] = None
+    guide_url: str | None = None
 
 
 class AccessRequirement(ApiModel):
@@ -35,15 +35,15 @@ class BootcampSession(ApiModel):
     date_label: str
     format: str
     availability: str
-    agenda_url: Optional[str] = None
-    register_url: Optional[str] = None
+    agenda_url: str | None = None
+    register_url: str | None = None
 
 
 class TrainingVideo(ApiModel):
     id: str
     title: str
     duration: str
-    url: Optional[str] = None
+    url: str | None = None
 
 
 class CohortStage(ApiModel):
@@ -54,11 +54,11 @@ class CohortStage(ApiModel):
 
 
 class OnboardingLinks(ApiModel):
-    access_matrix_url: Optional[str] = None
-    setup_guide_url: Optional[str] = None
+    access_matrix_url: str | None = None
+    setup_guide_url: str | None = None
     troubleshooting_url: str = "#support"
-    support_teams_url: Optional[str] = None
-    training_library_url: Optional[str] = None
+    support_teams_url: str | None = None
+    training_library_url: str | None = None
 
 
 class OnboardingResponse(ApiModel):
