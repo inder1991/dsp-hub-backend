@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from urllib.parse import parse_qs, quote, urlparse
@@ -111,11 +112,29 @@ def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(LOGIN_COOKIE, secure=True, httponly=True, samesite="lax", path="/")
 
 
+_STATIC_PORTAL_RETURN_PATHS = frozenset(
+    {
+        "#home",
+        "#support",
+        "#guide/cyberark/session-unavailable",
+        "#onboarding",
+        "#data-access",
+        "#jobs",
+        "#devspaces",
+        "#vms",
+        "#admin",
+        "#admin/data",
+    }
+)
+_RESOURCE_PORTAL_RETURN_PATH = re.compile(
+    r"^#(?:devspace|vm)/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+)
+
+
 def _safe_return_path(value: str) -> str:
-    if value.startswith("#") and not value.startswith("#//"):
-        return value[:500]
-    if value.startswith("/") and not value.startswith("//"):
-        return f"#{value.lstrip('/')}"[:500]
+    candidate = f"#{value.lstrip('/')}" if value.startswith("/") and not value.startswith("//") else value
+    if candidate in _STATIC_PORTAL_RETURN_PATHS or _RESOURCE_PORTAL_RETURN_PATH.fullmatch(candidate):
+        return candidate
     return "#home"
 
 

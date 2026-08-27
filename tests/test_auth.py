@@ -135,6 +135,37 @@ def test_local_admin_login_session_refresh_and_protected_api(auth_client: TestCl
     assert refreshed.json()["accessToken"] != payload["accessToken"]
 
 
+@pytest.mark.parametrize(
+    ("requested_path", "expected_path"),
+    [
+        ("#jobs", "#jobs"),
+        ("/devspace/risk-research", "#devspace/risk-research"),
+        ("#anything", "#home"),
+        ("#home/extra", "#home"),
+        ("#auth/callback?token_id=attacker-controlled", "#home"),
+        ("https://example.test/redirect", "#home"),
+    ],
+)
+def test_local_login_allows_only_registered_portal_return_paths(
+    auth_client: TestClient,
+    requested_path: str,
+    expected_path: str,
+) -> None:
+    create_account(auth_client, username="reader", password="correct horse battery", role="READ_ONLY")
+
+    login = auth_client.post(
+        "/auth/local/login",
+        json={
+            "username": "reader",
+            "password": "correct horse battery",
+            "returnTo": requested_path,
+        },
+    )
+
+    assert login.status_code == 200
+    assert login.json()["returnPath"] == expected_path
+
+
 def test_read_only_user_cannot_open_admin_control_plane(auth_client: TestClient) -> None:
     create_account(auth_client, username="reader", password="correct horse battery", role="READ_ONLY")
     login = auth_client.post(

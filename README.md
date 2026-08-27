@@ -61,6 +61,8 @@ the API. Application containers do not mutate the database schema at startup.
 Schedule `python -m app.auth.cleanup` to delete expired authentication state in
 bounded batches; expiration is still checked transactionally on every consume.
 
+Authentication return destinations are logical, registered frontend routes. Unknown hashes, arbitrary paths, authentication callback routes, and external URLs resolve to `#home`; they are never reflected as post-login destinations.
+
 Configure the actual Confluence and Remedy destinations in `.env` before a release-one deployment. Empty values are returned as `null`; the frontend then presents the option as planned/unconfigured rather than opening a fake URL.
 
 Support destinations can be overridden per service with one environment map:
