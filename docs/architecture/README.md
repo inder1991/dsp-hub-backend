@@ -13,8 +13,8 @@ cover both. The frontend repository carries a pointer here rather than a copy.
 | 2 | [phase-one.md](phase-one.md) | How VM, devspace and Kedro data reaches the screen | Draft for review |
 | 3 | [data-model.md](data-model.md) · [data-model.dbml](data-model.dbml) | The logical model | Approved v1 |
 | 4 | [data-model-review.md](data-model-review.md) | 16 findings against the model above | Open |
-| 5 | [ping-sso-integration-plan.md](ping-sso-integration-plan.md) | Authentication design | v0.2, in review |
-| 6 | [reviews/ping-sso-design-review.md](reviews/ping-sso-design-review.md) | 13 findings against the plan above | 1 closed, 12 open |
+| 5 | [ping-sso-integration-plan.md](ping-sso-integration-plan.md) | Authentication and local-user design | v0.7, implementation in progress |
+| 6 | [reviews/ping-sso-design-review.md](reviews/ping-sso-design-review.md) | Review of the plan above | S-01…S-13 closed · N-01…N-04 open |
 | 7 | [go-live-plan.md](go-live-plan.md) | Release sequencing and gates | Draft for review |
 
 If you are joining a module team and reading one thing, read `platform.md`.
